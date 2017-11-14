@@ -12,8 +12,9 @@ from multiprocessing import Process, Event
 
 from lib.config import cfg
 from lib.data_augmentation import preprocess_img
-from lib.data_io import get_voxel_file, get_rendering_file
+from lib.data_io import get_voxel_file, get_rendering_file, get_camera_file
 from lib.binvox_rw import read_as_3d_array
+from lib.get_projection import readBinvoxParams
 
 
 def print_error(func):
@@ -131,30 +132,42 @@ class ReconstructionDataProcess(DataProcess):
 
             # This will be fed into the queue. create new batch everytime
             batch_img = np.zeros(
-                (curr_n_views, self.batch_size, 3, img_h, img_w), dtype=theano.config.floatX)
+                (curr_n_views, self.batch_size, 4, img_h, img_w), dtype=theano.config.floatX)
             batch_voxel = np.zeros(
                 (self.batch_size, n_vox, 2, n_vox, n_vox), dtype=theano.config.floatX)
+            batch_camera = np.zeros((curr_n_views, self.batch_size, 11)).astype('float32')
 
             # load each data instance
-            for batch_id, db_ind in enumerate(db_inds):
-                category, model_id = self.data_paths[db_ind]
-                image_ids = np.random.choice(cfg.TRAIN.NUM_RENDERING, curr_n_views)
+            try:
+                for batch_id, db_ind in enumerate(db_inds):
+                    category, model_id = self.data_paths[db_ind]
+                    image_ids = np.random.choice(cfg.TRAIN.NUM_RENDERING, curr_n_views)
 
-                # load multi view images
-                for view_id, image_id in enumerate(image_ids):
-                    im = self.load_img(category, model_id, image_id)
-                    # channel, height, width
-                    batch_img[view_id, batch_id, :, :, :] = \
-                        im.transpose((2, 0, 1)).astype(theano.config.floatX)
+                    voxel, voxel_fn = self.load_label(category, model_id)
+                    with open(get_camera_file(category, model_id)) as f:
+                        camera_params = np.array([l.rstrip().split() for l in f.readlines()])[:, (0, 1, 3)].astype('float32')
 
-                voxel = self.load_label(category, model_id)
-                voxel_data = voxel.data
+                    # load multi view images
+                    for view_id, image_id in enumerate(image_ids):
+                        im, cr, cc, flipped = self.load_img(
+                                category, model_id, image_id)
+                        # channel, height, width
+                        batch_img[view_id, batch_id, :, :, :] = \
+                            im.transpose((2, 0, 1)).astype(theano.config.floatX)
+                        img_cam = camera_params[image_id].tolist()
+                        img_cam.extend(readBinvoxParams(voxel_fn))
+                        img_cam.extend((cr, cc, flipped))
+                        batch_camera[view_id, batch_id] = img_cam
 
-                batch_voxel[batch_id, :, 0, :, :] = voxel_data < 1
-                batch_voxel[batch_id, :, 1, :, :] = voxel_data
+                    voxel_data = voxel.data
+
+                    batch_voxel[batch_id, :, 0, :, :] = voxel_data < 1
+                    batch_voxel[batch_id, :, 1, :, :] = voxel_data
+            except FileNotFoundError:
+                continue
 
             # The following will wait until the queue frees
-            self.data_queue.put((batch_img, batch_voxel), block=True)
+            self.data_queue.put((batch_img, batch_camera, batch_voxel), block=True)
 
         print('Exiting')
 
@@ -162,15 +175,15 @@ class ReconstructionDataProcess(DataProcess):
         image_fn = get_rendering_file(category, model_id, image_id)
         im = Image.open(image_fn)
 
-        t_im = preprocess_img(im, self.train)
-        return t_im
+        t_im, cr, cc, flipped = preprocess_img(im, self.train)
+        return t_im, cr, cc, flipped
 
     def load_label(self, category, model_id):
         voxel_fn = get_voxel_file(category, model_id)
         with open(voxel_fn, 'rb') as f:
             voxel = read_as_3d_array(f)
 
-        return voxel
+        return voxel, voxel_fn
 
 
 def kill_processes(queue, processes):
@@ -204,13 +217,13 @@ def get_while_running(data_process, data_queue, sleep_time=0):
     while True:
         time.sleep(sleep_time)
         try:
-            batch_data, batch_label = data_queue.get_nowait()
+            batch_data, batch_camera, batch_label = data_queue.get_nowait()
         except queue.Empty:
             if not data_process.is_alive():
                 break
             else:
                 continue
-        yield batch_data, batch_label
+        yield batch_data, batch_camera, batch_label
 
 
 def test_process():
@@ -226,7 +239,7 @@ def test_process():
 
     data_process = ReconstructionDataProcess(data_queue, category_model_pair)
     data_process.start()
-    batch_img, batch_voxel = data_queue.get()
+    batch_img, batch_cam, batch_voxel = data_queue.get()
 
     kill_processes(data_queue, [data_process])
 

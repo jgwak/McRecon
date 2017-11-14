@@ -1,7 +1,7 @@
-from models.gru_net import GRUNet
-from models.res_gru_net import ResidualGRUNet
+from models.mask_net import MaskNet
+from models.gan_mask_net import GANMaskNet
 
-MODELS = (GRUNet, ResidualGRUNet)
+MODELS = (MaskNet, GANMaskNet)
 
 
 def get_models():

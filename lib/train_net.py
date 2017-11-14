@@ -55,17 +55,15 @@ def train_net():
     train_queue = Queue(cfg.QUEUE_SIZE)
     val_queue = Queue(cfg.QUEUE_SIZE)
 
+    gen_data = category_model_id_pair(
+            dataset_portion=cfg.TRAIN.GENERATOR_DATASET_PORTION)
+    disc_data = category_model_id_pair(
+            dataset_portion=cfg.TRAIN.DISCRIMINATOR_DATASET_PORTION)
+
     train_processes = make_data_processes(
-        train_queue,
-        category_model_id_pair(dataset_portion=cfg.TRAIN.DATASET_PORTION),
-        cfg.TRAIN.NUM_WORKER,
-        repeat=True)
+        train_queue, gen_data, cfg.TRAIN.NUM_WORKER, repeat=True)
     val_processes = make_data_processes(
-        val_queue,
-        category_model_id_pair(dataset_portion=cfg.TEST.DATASET_PORTION),
-        1,
-        repeat=True,
-        train=False)
+        val_queue, disc_data, cfg.TRAIN.NUM_WORKER, repeat=True)
 
     # Train the network
     solver.train(train_queue, val_queue)

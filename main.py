@@ -45,6 +45,18 @@ def parse_args():
         default=cfg.CONST.BATCH_SIZE,
         type=int)
     parser.add_argument(
+        '--diff-backprop',
+        dest='diff_backprop',
+        help='Differentiable step backprop method',
+        default=cfg.TRAIN.DIFF_BACKPROP,
+        type=str)
+    parser.add_argument(
+        '--stabilizer',
+        dest='stabilizer',
+        help='GAN stabilizer algorithm',
+        default=cfg.TRAIN.STABILIZER,
+        type=str)
+    parser.add_argument(
         '--iter',
         dest='iter',
         help='number of iterations',
@@ -96,6 +108,10 @@ def main():
         cfg_from_list(['DATASET', args.dataset])
     if args.exp is not None:
         cfg_from_list(['TEST.EXP_NAME', args.exp])
+    if args.diff_backprop is not None:
+        cfg_from_list(['TRAIN.DIFF_BACKPROP', args.diff_backprop])
+    if args.stabilizer is not None:
+        cfg_from_list(['TRAIN.STABILIZER', args.stabilizer])
     if args.out_path is not None:
         cfg_from_list(['DIR.OUT_PATH', args.out_path])
     if args.weights is not None:

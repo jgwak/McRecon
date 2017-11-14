@@ -2,7 +2,10 @@ import numpy as np
 
 
 def evaluate_voxel_prediction(preds, gt, thresh):
-    preds_occupy = preds[:, 1, :, :] >= thresh
+    if preds.shape[1] == 2:
+        preds_occupy = preds[:, 1, :, :] >= thresh
+    else:
+        preds_occupy = preds >= thresh
     diff = np.sum(np.logical_xor(preds_occupy, gt[:, 1, :, :]))
     intersection = np.sum(np.logical_and(preds_occupy, gt[:, 1, :, :]))
     union = np.sum(np.logical_or(preds_occupy, gt[:, 1, :, :]))

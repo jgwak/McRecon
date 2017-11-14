@@ -20,10 +20,12 @@ def image_transform(img, crop_x, crop_y, crop_loc=None, color_tint=None):
         img = img[cr:cr + img_h, cc:cc + img_w]
         # depth = depth[cr:cr+img_h, cc:cc+img_w]
 
+    flipped = 0
     if cfg.TRAIN.FLIP and np.random.rand() > 0.5:
         img = img[:, ::-1, ...]
+        flipped = 1
 
-    return img
+    return img, cr, cc, flipped
 
 
 def crop_center(im, new_height, new_width):
@@ -33,7 +35,7 @@ def crop_center(im, new_height, new_width):
     top = (height - new_height) // 2
     right = (width + new_width) // 2
     bottom = (height + new_height) // 2
-    return im[top:bottom, left:right]
+    return im[top:bottom, left:right], top, left, 0
 
 
 def add_random_color_background(im, color_range):
@@ -42,12 +44,12 @@ def add_random_color_background(im, color_range):
     if isinstance(im, Image.Image):
         im = np.array(im)
 
-    if im.shape[2] > 3:
-        # If the image has the alpha channel, add the background
-        alpha = (np.expand_dims(im[:, :, 3], axis=2) == 0).astype(np.float)
-        im = im[:, :, :3]
-        bg_color = np.array([[[r, g, b]]])
-        im = alpha * bg_color + (1 - alpha) * im
+    # Add color background. Preserve alpha channel as a ground-truth mask.
+    assert im.shape[2] == 4, 'Image must have an alpha channel'
+    bg = (np.expand_dims(im[:, :, 3], axis=2) == 0).astype(np.float)
+    bg_color = np.array([[[r, g, b]]])
+    im[:, :, :3] = bg * bg_color + (1 - bg) * im[:, :, :3]
+    im[:, :, 3] = 1 - bg[..., 0]
 
     return im
 
@@ -57,17 +59,17 @@ def preprocess_img(im, train=True):
     im = add_random_color_background(im, cfg.TRAIN.NO_BG_COLOR_RANGE if train else
                                      cfg.TEST.NO_BG_COLOR_RANGE)
 
-    # If the image has alpha channel, remove it.
-    im_rgb = np.array(im)[:, :, :3].astype(np.float32)
     if train:
-        t_im = image_transform(im_rgb, cfg.TRAIN.PAD_X, cfg.TRAIN.PAD_Y)
+        transformed = image_transform(im, cfg.TRAIN.PAD_X, cfg.TRAIN.PAD_Y)
     else:
-        t_im = crop_center(im_rgb, cfg.CONST.IMG_H, cfg.CONST.IMG_W)
+        transformed = crop_center(im, cfg.CONST.IMG_H, cfg.CONST.IMG_W)
+
+    t_im, cr, cc, flipped = transformed
 
     # Scale image
     t_im = t_im / 255.
 
-    return t_im
+    return t_im, cr, cc, flipped
 
 
 def test(fn):

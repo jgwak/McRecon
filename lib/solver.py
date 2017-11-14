@@ -17,7 +17,7 @@ def max_or_nan(params):
     return nan_or_max_param
 
 
-def ADAM(lr, params, grads, loss, iteration, beta_1=0.9, beta_2=0.999, epsilon=1e-8):
+def ADAM(lr, params, grads, iteration, beta_1=0.9, beta_2=0.999, epsilon=1e-8):
     """
     ADAM update
     """
@@ -48,7 +48,7 @@ def ADAM(lr, params, grads, loss, iteration, beta_1=0.9, beta_2=0.999, epsilon=1
     return updates
 
 
-def SGD(lr, params, grads, loss):
+def SGD(lr, params, grads):
     """
     Stochastic Gradient Descent w/ momentum
     """
@@ -78,7 +78,9 @@ class Solver(object):
         self.lr = theano.shared(np.float32(1))
         self.iteration = theano.shared(np.float32(0))  # starts from 0
         self._test = None
-        self._train_loss = None
+        self._evaluate_discriminator = None
+        self._discriminator_train_loss = None
+        self._generator_train_loss = None
         self._test_output = None
         self.compile_model(cfg.TRAIN.POLICY)
 
@@ -88,27 +90,58 @@ class Solver(object):
         iteration = self.iteration
 
         if policy == 'sgd':
-            updates = SGD(lr, net.params, net.grads, net.loss)
+            self.discriminator_updates = SGD(lr, net.discriminator_params,
+                    net.discriminator_grads)
+            self.generator_updates = SGD(lr, net.generator_params,
+                    net.generator_grads)
         elif policy == 'adam':
-            updates = ADAM(lr, net.params, net.grads, net.loss, iteration)
+            self.discriminator_updates = ADAM(lr, net.discriminator_params,
+                    net.discriminator_grads, iteration)
+            self.generator_updates = ADAM(lr, net.generator_params,
+                    net.generator_grads, iteration)
         else:
             sys.exit('Error: Unimplemented optimization policy')
-
-        self.updates = updates
 
     def set_lr(self, lr):
         self.lr.set_value(lr)
 
     @property
-    def train_loss(self):
-        if self._train_loss is None:
-            print('Compiling training function')
-            self._train_loss = theano.function(
-                [self.net.x, self.net.y], self.net.loss, updates=self.updates, profile=cfg.PROFILE)
-        self.iteration.set_value(self.iteration.get_value() + 1)
-        return self._train_loss
+    def evaluate_discriminator(self):
+        if self._evaluate_discriminator is None:
+            print('Compiling evaluation function')
+            self._evaluate_discriminator = theano.function(
+                [self.net.x, self.net.camera, self.net.y],
+                [self.net.error_F, self.net.error_R],
+                profile=cfg.PROFILE,
+                on_unused_input='warn')
+        return self._evaluate_discriminator
 
-    def train(self, train_queue, val_queue=None):
+    @property
+    def discriminator_train_loss(self):
+        if self._discriminator_train_loss is None:
+            print('Compiling discriminator training function')
+            self._discriminator_train_loss = theano.function(
+                [self.net.x, self.net.camera, self.net.y],
+                self.net.discriminator_loss,
+                updates=self.discriminator_updates, profile=cfg.PROFILE,
+                on_unused_input='warn')
+        self.iteration.set_value(self.iteration.get_value() + 1)
+        return self._discriminator_train_loss
+
+    @property
+    def generator_train_loss(self):
+        if self._generator_train_loss is None:
+            print('Compiling generator training function')
+            self._generator_train_loss = theano.function(
+                [self.net.x, self.net.camera],
+                [self.net.voxel_loss, self.net.mask_loss,
+                 *self.net.activations],
+                updates=self.generator_updates, profile=cfg.PROFILE,
+                on_unused_input='warn')
+        self.iteration.set_value(self.iteration.get_value() + 1)
+        return self._generator_train_loss
+
+    def train(self, generator_queue, discriminator_queue):
         ''' Given data queues, train the network '''
         # Parameter directory
         save_dir = os.path.join(cfg.DIR.OUT_PATH)
@@ -118,7 +151,6 @@ class Solver(object):
         # Timer for the training op and parallel data loading op.
         train_timer = Timer()
         data_timer = Timer()
-        training_losses = []
 
         start_iter = 0
         # Resume training
@@ -131,59 +163,79 @@ class Solver(object):
         lr_steps = [int(k) for k in cfg.TRAIN.LEARNING_RATES.keys()]
 
         print('Set the learning rate to %f.' % lr)
-        self.set_lr(lr)
+        gen_lr = lr
+
+        discriminator_losses = []
+        generator_losses = []
+        mask_losses = []
+        generator_idx = 0
+        voxel_loss = 0
+        generator_loss = 0
+        mask_loss = 0
+        discriminator_loss = 0
 
         # Main training loop
         for train_ind in range(start_iter, cfg.TRAIN.NUM_ITERATION + 1):
+            self.net.noise.set_value(max(1 - float(train_ind) / 20000., 1e-8))
             data_timer.tic()
-            batch_img, batch_voxel = train_queue.get()
+            gen_img, gen_camera, _ = generator_queue.get()
             data_timer.toc()
-
-            if self.net.is_x_tensor4:
-                batch_img = batch_img[0]
+            data_timer.tic()
+            _, _, disc_voxel = discriminator_queue.get()
+            data_timer.toc()
 
             # Apply one gradient step
             train_timer.tic()
-            loss = self.train_loss(batch_img, batch_voxel)
+            if self.net.discriminator_loss is not None:
+                error_F, error_R = self.evaluate_discriminator(gen_img,
+                                                               gen_camera,
+                                                               disc_voxel)
+                if error_F > 0.2 or error_R > 0.2:
+                    self.set_lr(gen_lr / 100.)
+                    discriminator_loss = self.discriminator_train_loss(gen_img,
+                            gen_camera, disc_voxel)
+                    discriminator_losses.append(discriminator_loss)
+            self.set_lr(gen_lr)
+            results = self.generator_train_loss(gen_img, gen_camera)
+            generator_loss = results[0]
+            generator_losses.append(generator_loss)
+            generator_idx += 1
+            mask_loss = results[1]
+            mask_losses.append(mask_loss)
+            activations = results[2:]
             train_timer.toc()
-
-            training_losses.append(loss)
 
             # Decrease learning rate at certain points
             if train_ind in lr_steps:
                 # edict only takes string for key. Hacky way
-                self.set_lr(np.float(cfg.TRAIN.LEARNING_RATES[str(train_ind)]))
-                print('Learing rate decreased to %f: ' % self.lr.get_value())
+                gen_lr = np.float(cfg.TRAIN.LEARNING_RATES[str(train_ind)])
+                print('Learing rate decreased to %f: ' % gen_lr)
 
             # Debugging modules
             #
             # Print status, run validation, check divergence, and save model.
             if train_ind % cfg.TRAIN.PRINT_FREQ == 0:
                 # Print the current loss
-                print('%s Iter: %d Loss: %f' % (datetime.now(), train_ind, loss))
-
-            if train_ind % cfg.TRAIN.VALIDATION_FREQ == 0 and val_queue is not None:
-                # Print test loss and params to check convergence every N iterations
-                val_losses = []
-                for i in range(cfg.TRAIN.NUM_VALIDATION_ITERATIONS):
-                    batch_img, batch_voxel = val_queue.get()
-                    _, val_loss, _ = self.test_output(batch_img, batch_voxel)
-                    val_losses.append(val_loss)
-                print('%s Test loss: %f' % (datetime.now(), np.mean(val_losses)))
+                get_mean = lambda x, y: np.mean(x) if x else y
+                print("""%s Iter %d: Discriminator loss %f, Generator """
+                      """loss %f, Mask loss %f""" % (
+                          datetime.now(), train_ind,
+                          get_mean(discriminator_losses, discriminator_loss),
+                          get_mean(generator_losses, generator_loss),
+                          get_mean(mask_losses, mask_loss)))
+                discriminator_losses = []
+                generator_losses = []
+                mask_losses = []
 
             if train_ind % cfg.TRAIN.NAN_CHECK_FREQ == 0:
                 # Check that the network parameters are all valid
-                max_param = max_or_nan(self.net.params)
+                max_param = max_or_nan(self.net.all_params)
                 if np.isnan(max_param):
                     print('NAN detected')
                     break
 
             if train_ind % cfg.TRAIN.SAVE_FREQ == 0 and not train_ind == 0:
-                self.save(training_losses, save_dir, train_ind)
-
-            if loss > cfg.TRAIN.LOSS_LIMIT:
-                print("Cost exceeds the threshold. Stop training")
-                break
+                self.save(mask_losses, save_dir, train_ind)
 
     def save(self, training_losses, save_dir, step):
         ''' Save the current network parameters to the save_dir and make a
@@ -204,7 +256,7 @@ class Solver(object):
         with open(os.path.join(save_dir, 'loss.%d.txt' % step), 'w') as f:
             f.write('\n'.join([str(l) for l in training_losses]))
 
-    def test_output(self, x, y=None):
+    def test_output(self, x, c, y=None):
         '''Generate the reconstruction, loss, and activation. Evaluate loss if
         ground truth output is given. Otherwise, return reconstruction and
         activation'''
@@ -212,10 +264,11 @@ class Solver(object):
         if self._test_output is None:
             print('Compiling testing function')
             # Lazy load the test function
-            self._test_output = theano.function([self.net.x, self.net.y],
-                                                [self.net.output,
-                                                 self.net.loss,
-                                                 *self.net.activations])
+            self._test_output = theano.function(
+                    [self.net.x, self.net.camera, self.net.y],
+                    [self.net.output, self.net.voxel_loss,
+                     *self.net.activations],
+                    on_unused_input='warn')
 
         # If the ground truth data is given, evaluate loss. O.w. feed zeros and
         # does not return the loss
@@ -229,7 +282,7 @@ class Solver(object):
             y_val = y
 
         # Parse the result
-        results = self._test_output(x, y_val)
+        results = self._test_output(x, c, y_val)
         prediction = results[0]
         loss = results[1]
         activations = results[2:]

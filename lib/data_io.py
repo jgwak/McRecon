@@ -28,6 +28,8 @@ def category_model_id_pair(dataset_portion=[]):
     cats = OrderedDict(sorted(cats.items(), key=lambda x: x[0]))
 
     for k, cat in cats.items():  # load by categories
+        if cfg.CONST.DATA_CLASS and cat['id'] not in cfg.CONST.DATA_CLASS:
+            continue
         model_path = os.path.join(cfg.DIR.SHAPENET_QUERY_PATH, cat['id'])
         # category = cat['name']
         models = model_names(model_path)
@@ -53,3 +55,8 @@ def get_voxel_file(category, model_id):
 
 def get_rendering_file(category, model_id, rendering_id):
     return os.path.join(cfg.DIR.RENDERING_PATH % (category, model_id), '%02d.png' % rendering_id)
+
+
+def get_camera_file(category, model_id):
+    return os.path.join(cfg.DIR.RENDERING_PATH % (category, model_id),
+                        'rendering_metadata.txt')

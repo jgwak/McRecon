@@ -23,6 +23,8 @@ __C.CONST.N_VIEWS = 5
 __C.CONST.BATCH_SIZE = 36
 __C.CONST.NETWORK_CLASS = 'ResidualGRUNet'
 __C.CONST.WEIGHTS = ''  # when set, load the weights from the file
+# __C.CONST.DATA_CLASS = ('04256520', '03001627', '02828884', '04379243')  # furniture: sofa, couch, chair, bench, table
+__C.CONST.DATA_CLASS = ('02958343', '02691156')   # transportations: boat, car, airplane
 
 #
 # Directories
@@ -43,7 +45,8 @@ __C.TRAIN = edict()
 __C.TRAIN.RESUME_TRAIN = False
 __C.TRAIN.INITIAL_ITERATION = 0  # when the training resumes, set the iteration number
 __C.TRAIN.USE_REAL_IMG = False
-__C.TRAIN.DATASET_PORTION = [0, 0.8]
+__C.TRAIN.GENERATOR_DATASET_PORTION = [0, 0.45]
+__C.TRAIN.DISCRIMINATOR_DATASET_PORTION = [0.45, 0.9]
 
 # Data worker
 __C.TRAIN.NUM_WORKER = 1  # number of data workers
@@ -74,15 +77,18 @@ __C.TRAIN.SIMPLE_BACKGROUND_RATIO = 0.5  # ratio of the simple backgrounded imag
 __C.TRAIN.DEFAULT_LEARNING_RATE = 1e-4
 __C.TRAIN.POLICY = 'adam'  # def: sgd, adam
 # The EasyDict can't use dict with integers as keys
-__C.TRAIN.LEARNING_RATES = {'20000': 1e-5, '60000': 1e-6}
+__C.TRAIN.LEARNING_RATES = {'10000': 1e-5, '30000': 1e-6}
 __C.TRAIN.MOMENTUM = 0.90
 # weight decay or regularization constant. If not set, the loss can diverge
 # after the training almost converged since weight can increase indefinitely
 # (for cross entropy loss). Too high regularization will also hinder training.
 __C.TRAIN.WEIGHT_DECAY = 0.00005
 __C.TRAIN.LOSS_LIMIT = 2  # stop training if the loss exceeds the limit
-__C.TRAIN.SAVE_FREQ = 10000  # weights will be overwritten every save_freq
+__C.TRAIN.SAVE_FREQ = 500  # weights will be overwritten every save_freq
 __C.TRAIN.PRINT_FREQ = 40
+__C.TRAIN.DIFF_BACKPROP = 'linear'
+__C.TRAIN.STABILIZER = 'diffstep'
+__C.TRAIN.NOISE_MAXSTD = 0.12
 
 #
 # Testing options
@@ -91,13 +97,12 @@ __C.TEST = edict()
 __C.TEST.EXP_NAME = 'test'
 __C.TEST.USE_IMG = False
 __C.TEST.MODEL_ID = []
-__C.TEST.DATASET_PORTION = [0.8, 1]
+__C.TEST.DATASET_PORTION = [0.9, 1]
 __C.TEST.SAMPLE_SIZE = 0
 __C.TEST.IMG_PATH = ''
 __C.TEST.AZIMUTH = []
 __C.TEST.NO_BG_COLOR_RANGE = [[240, 240], [240, 240], [240, 240]]
 
-__C.TEST.VISUALIZE = False
 __C.TEST.VOXEL_THRESH = [0.4]
 
 

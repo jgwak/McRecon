@@ -5,13 +5,16 @@ import theano
 import theano.tensor as tensor
 
 from models.net import Net, tensor5
+from lib.config import cfg
 from lib.layers import TensorProductLayer, ConvLayer, PoolLayer, Unpool3DLayer, \
     LeakyReLU, SoftmaxWithLoss3D, Conv3DLayer, InputLayer, FlattenLayer, \
     FCConv3DLayer, TanhLayer, SigmoidLayer, ComplementLayer, AddLayer, \
-    EltwiseMultiplyLayer, get_trainable_params
+    EltwiseMultiplyLayer, RaytracingLayer, DimShuffleLayer, Pool3DLayer, \
+    DifferentiableStepLayer, SubtractLayer, InstanceNoiseLayer, \
+    get_trainable_params
 
 
-class ResidualGRUNet(Net):
+class MaskNet(Net):
 
     def network_definition(self):
 
@@ -22,44 +25,49 @@ class ResidualGRUNet(Net):
         img_w = self.img_w
         img_h = self.img_h
         n_gru_vox = 4
-        # n_vox = self.n_vox
+        n_vox = self.n_vox
 
         n_convfilter = [96, 128, 256, 256, 256, 256]
-        n_fc_filters = [1024]
-        n_deconvfilter = [128, 128, 128, 64, 32, 2]
+        n_fc_filters = [1024, 2]
+        n_deconvfilter = [128, 128, 128, 128, 96, 2]
+        n_maskconvfilter = [96, 2]
+        n_conv_advfilter = [32, 128, 128, 128, 32]
+        n_fc_advfilter = [1024, 2]
         input_shape = (self.batch_size, 3, img_w, img_h)
+        rendering_shape = (self.batch_size, n_deconvfilter[3], img_h, img_w)
+        voxel_shape = (self.batch_size, n_vox, n_vox, n_vox)
 
         # To define weights, define the network structure first
         x = InputLayer(input_shape)
-        conv1a = ConvLayer(x, (n_convfilter[0], 7, 7))
-        conv1b = ConvLayer(conv1a, (n_convfilter[0], 3, 3))
+        conv1a = ConvLayer(x, (n_convfilter[0], 7, 7), param_type='generator')
+        conv1b = ConvLayer(conv1a, (n_convfilter[0], 3, 3), param_type='generator')
         pool1 = PoolLayer(conv1b)
 
-        conv2a = ConvLayer(pool1, (n_convfilter[1], 3, 3))
-        conv2b = ConvLayer(conv2a, (n_convfilter[1], 3, 3))
-        conv2c = ConvLayer(pool1, (n_convfilter[1], 1, 1))
+        conv2a = ConvLayer(pool1, (n_convfilter[1], 3, 3), param_type='generator')
+        conv2b = ConvLayer(conv2a, (n_convfilter[1], 3, 3), param_type='generator')
+        conv2c = ConvLayer(pool1, (n_convfilter[1], 1, 1), param_type='generator')
         pool2 = PoolLayer(conv2c)
 
-        conv3a = ConvLayer(pool2, (n_convfilter[2], 3, 3))
-        conv3b = ConvLayer(conv3a, (n_convfilter[2], 3, 3))
-        conv3c = ConvLayer(pool2, (n_convfilter[2], 1, 1))
+        conv3a = ConvLayer(pool2, (n_convfilter[2], 3, 3), param_type='generator')
+        conv3b = ConvLayer(conv3a, (n_convfilter[2], 3, 3), param_type='generator')
+        conv3c = ConvLayer(pool2, (n_convfilter[2], 1, 1), param_type='generator')
         pool3 = PoolLayer(conv3b)
 
-        conv4a = ConvLayer(pool3, (n_convfilter[3], 3, 3))
-        conv4b = ConvLayer(conv4a, (n_convfilter[3], 3, 3))
+        conv4a = ConvLayer(pool3, (n_convfilter[3], 3, 3), param_type='generator')
+        conv4b = ConvLayer(conv4a, (n_convfilter[3], 3, 3), param_type='generator')
         pool4 = PoolLayer(conv4b)
 
-        conv5a = ConvLayer(pool4, (n_convfilter[4], 3, 3))
-        conv5b = ConvLayer(conv5a, (n_convfilter[4], 3, 3))
-        conv5c = ConvLayer(pool4, (n_convfilter[4], 1, 1))
+        conv5a = ConvLayer(pool4, (n_convfilter[4], 3, 3), param_type='generator')
+        conv5b = ConvLayer(conv5a, (n_convfilter[4], 3, 3), param_type='generator')
+        conv5c = ConvLayer(pool4, (n_convfilter[4], 1, 1), param_type='generator')
         pool5 = PoolLayer(conv5b)
 
-        conv6a = ConvLayer(pool5, (n_convfilter[5], 3, 3))
-        conv6b = ConvLayer(conv6a, (n_convfilter[5], 3, 3))
+        conv6a = ConvLayer(pool5, (n_convfilter[5], 3, 3), param_type='generator')
+        conv6b = ConvLayer(conv6a, (n_convfilter[5], 3, 3), param_type='generator')
         pool6 = PoolLayer(conv6b)
 
         flat6 = FlattenLayer(pool6)
-        fc7 = TensorProductLayer(flat6, n_fc_filters[0])
+        fc7 = TensorProductLayer(flat6, n_fc_filters[0], param_type='generator')
 
         # Set the size to be 256x4x4x4
         s_shape = (self.batch_size, n_gru_vox, n_deconvfilter[0], n_gru_vox, n_gru_vox)
@@ -67,13 +75,13 @@ class ResidualGRUNet(Net):
         # Dummy 3D grid hidden representations
         prev_s = InputLayer(s_shape)
 
-        t_x_s_update = FCConv3DLayer(prev_s, fc7, (n_deconvfilter[0], n_deconvfilter[0], 3, 3, 3))
-        t_x_s_reset = FCConv3DLayer(prev_s, fc7, (n_deconvfilter[0], n_deconvfilter[0], 3, 3, 3))
+        t_x_s_update = FCConv3DLayer(prev_s, fc7, (n_deconvfilter[0], n_deconvfilter[0], 3, 3, 3), param_type='generator')
+        t_x_s_reset = FCConv3DLayer(prev_s, fc7, (n_deconvfilter[0], n_deconvfilter[0], 3, 3, 3), param_type='generator')
 
         reset_gate = SigmoidLayer(t_x_s_reset)
 
         rs = EltwiseMultiplyLayer(reset_gate, prev_s)
-        t_x_rs = FCConv3DLayer(rs, fc7, (n_deconvfilter[0], n_deconvfilter[0], 3, 3, 3))
+        t_x_rs = FCConv3DLayer(rs, fc7, (n_deconvfilter[0], n_deconvfilter[0], 3, 3, 3), param_type='generator')
 
         def recurrence(x_curr, prev_s_tensor, prev_in_gate_tensor):
             # Scan function cannot use compiled function.
@@ -152,8 +160,8 @@ class ResidualGRUNet(Net):
 
             return gru_out_.output, update_gate_.output
 
-        s_update, _ = theano.scan(recurrence,
-            sequences=[self.x],  # along with images, feed in the index of the current frame
+        s_update, r_update = theano.scan(recurrence,
+                sequences=[self.x[:, :, :3]],  # along with images, feed in the index of the current frame
             outputs_info=[tensor.zeros_like(np.zeros(s_shape),
                                             dtype=theano.config.floatX),
                            tensor.zeros_like(np.zeros(s_shape),
@@ -162,43 +170,69 @@ class ResidualGRUNet(Net):
         update_all = s_update[-1]
         s_all = s_update[0]
         s_last = s_all[-1]
-        gru_s = InputLayer(s_shape, s_last)
+        gru_s   = InputLayer(s_shape, s_last)
         unpool7 = Unpool3DLayer(gru_s)
-        conv7a = Conv3DLayer(unpool7, (n_deconvfilter[1], 3, 3, 3))
-        rect7a = LeakyReLU(conv7a)
-        conv7b = Conv3DLayer(rect7a, (n_deconvfilter[1], 3, 3, 3))
-        rect7 = LeakyReLU(conv7b)
-        res7 = AddLayer(unpool7, rect7)
+        conv7a  = Conv3DLayer(unpool7, (n_deconvfilter[1], 3, 3, 3),
+                param_type='generator')
+        rect7a  = LeakyReLU(conv7a)
+        conv7b  = Conv3DLayer(rect7a, (n_deconvfilter[1], 3, 3, 3),
+                param_type='generator')
+        rect7   = LeakyReLU(conv7b)
+        res7    = AddLayer(unpool7, rect7)
 
         unpool8 = Unpool3DLayer(res7)
-        conv8a = Conv3DLayer(unpool8, (n_deconvfilter[2], 3, 3, 3))
-        rect8a = LeakyReLU(conv8a)
-        conv8b = Conv3DLayer(rect8a, (n_deconvfilter[2], 3, 3, 3))
-        rect8 = LeakyReLU(conv8b)
-        res8 = AddLayer(unpool8, rect8)
+        conv8a  = Conv3DLayer(unpool8, (n_deconvfilter[2], 3, 3, 3),
+                param_type='generator')
+        rect8a  = LeakyReLU(conv8a)
+        conv8b  = Conv3DLayer(rect8a, (n_deconvfilter[2], 3, 3, 3),
+                param_type='generator')
+        rect8   = LeakyReLU(conv8b)
+        res8    = AddLayer(unpool8, rect8)
 
         unpool9 = Unpool3DLayer(res8)
-        conv9a = Conv3DLayer(unpool9, (n_deconvfilter[3], 3, 3, 3))
-        rect9a = LeakyReLU(conv9a)
-        conv9b = Conv3DLayer(rect9a, (n_deconvfilter[3], 3, 3, 3))
-        rect9 = LeakyReLU(conv9b)
+        conv9a  = Conv3DLayer(unpool9, (n_deconvfilter[3], 3, 3, 3),
+                param_type='generator')
+        rect9a  = LeakyReLU(conv9a)
+        conv9b  = Conv3DLayer(rect9a, (n_deconvfilter[3], 3, 3, 3),
+                param_type='generator')
+        rect9   = LeakyReLU(conv9b)
 
-        conv9c = Conv3DLayer(unpool9, (n_deconvfilter[3], 1, 1, 1))
-        res9 = AddLayer(conv9c, rect9)
+        conv9c  = Conv3DLayer(unpool9, (n_deconvfilter[3], 1, 1, 1),
+                param_type='generator')
+        res9    = AddLayer(conv9c, rect9)
 
-        conv10a = Conv3DLayer(res9, (n_deconvfilter[4], 3, 3, 3))
+        conv10a = Conv3DLayer(res9, (n_deconvfilter[3], 3, 3, 3),
+                param_type='generator')
         rect10a = LeakyReLU(conv10a)
-        conv10b = Conv3DLayer(rect10a, (n_deconvfilter[4], 3, 3, 3))
-        rect10 = LeakyReLU(conv10b)
+        conv10b = Conv3DLayer(rect10a, (n_deconvfilter[3], 3, 3, 3),
+                param_type='generator')
+        rect10  = LeakyReLU(conv10b)
 
-        conv10c = Conv3DLayer(rect10a, (n_deconvfilter[4], 3, 3, 3))
-        res10 = AddLayer(conv10c, rect10)
+        conv10c = Conv3DLayer(rect10a, (n_deconvfilter[3], 3, 3, 3),
+                param_type='generator')
+        res10   = AddLayer(conv10c, rect10)
 
-        conv11 = Conv3DLayer(res10, (n_deconvfilter[5], 3, 3, 3))
-        softmax_loss = SoftmaxWithLoss3D(conv11.output)
+        conv11  = Conv3DLayer(res10, (n_deconvfilter[4], 3, 3, 3),
+                param_type='generator')
+        conv12  = Conv3DLayer(conv11, (n_deconvfilter[5], 3, 3, 3),
+                param_type='generator')
+        voxel_loss = SoftmaxWithLoss3D(conv12.output)
+        reconstruction = voxel_loss.prediction()
 
-        self.loss = softmax_loss.loss(self.y)
-        self.error = softmax_loss.error(self.y)
-        self.params = get_trainable_params()
-        self.output = softmax_loss.prediction()
-        self.activations = [update_all]
+        voxel_input = InputLayer(voxel_shape, reconstruction[:, :, 1])
+        rend = RaytracingLayer(voxel_input, self.camera, img_w, img_h,
+                               self.pad_x, self.pad_y)
+
+        assert not r_update, 'Unexpected update in the RNN.'
+        self.mask_loss = tensor.nnet.nnet.binary_crossentropy(
+                tensor.clip(rend.output[:, :, 0], 1e-7, 1.0 - 1e-7),
+                tensor.gt(self.x[:, :, 3], 0.).astype(theano.config.floatX)).mean()
+        self.voxel_loss = self.mask_loss
+        self.discriminator_loss = None
+        self.generator_loss = self.mask_loss
+        self.error = voxel_loss.error(self.y)
+        self.generator_params = get_trainable_params()['generator']
+        self.all_params = self.generator_params + self.discriminator_params
+        self.load_params = self.generator_params
+        self.output = reconstruction
+        self.activations = [rend.output[:, :, 0]]

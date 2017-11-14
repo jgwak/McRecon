@@ -1,6 +1,9 @@
 # Python cache
 *.pyc
 
+# Dataset
+ShapeNet
+
 # OS X temporary metadata
 ._*
 *.DS_Store
