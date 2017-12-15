@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 import sys
 if (sys.version_info < (3, 0)):
-    raise Exception("Please follow the installation instruction on 'https://github.com/chrischoy/3D-R2N2'")
+    raise Exception("Python 3 required. Please follow the installation instruction on 'https://github.com/jgwak/McRecon'")
 
 import numpy as np
 import argparse

@@ -256,7 +256,7 @@ class Solver(object):
         with open(os.path.join(save_dir, 'loss.%d.txt' % step), 'w') as f:
             f.write('\n'.join([str(l) for l in training_losses]))
 
-    def test_output(self, x, c, y=None):
+    def test_output(self, x, c=None, y=None):
         '''Generate the reconstruction, loss, and activation. Evaluate loss if
         ground truth output is given. Otherwise, return reconstruction and
         activation'''
@@ -281,8 +281,13 @@ class Solver(object):
             no_loss_return = False
             y_val = y
 
+        if c is None:
+            c_val = np.random.rand(*x.shape[:2], 11).astype(theano.config.floatX)
+        else:
+            c_val = c
+
         # Parse the result
-        results = self._test_output(x, c, y_val)
+        results = self._test_output(x, c_val, y_val)
         prediction = results[0]
         loss = results[1]
         activations = results[2:]

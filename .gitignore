@@ -13,3 +13,5 @@ wiki/
 
 # Results
 output/
+*.obj
+*.npy
